@@ -55,6 +55,7 @@ const nextConfig = {
       },
     ];
   },
+  output: "standalone",
   experimental: {
     externalDir: true,
   },
