@@ -1,0 +1,59 @@
+name: Jules
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number to send to Jules"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+jobs:
+  send-to-jules:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'jules'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create Jules session from issue
+        env:
+          JULES_API_KEY: ${{ secrets.JULES_API_KEY }}
+          REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$JULES_API_KEY" ]; then
+            echo "::error::JULES_API_KEY secret is not set on this repository. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          prompt="$(jq -n \
+            --arg title "${ISSUE_TITLE:-}" \
+            --arg body "${ISSUE_BODY:-}" \
+            '{prompt: ("Implement the following GitHub issue.\n\nTitle: " + $title + "\n\nDescription:\n" + $body + "\n\nRequirements:\n- Inspect the existing code before changing anything.\n- Add or update tests where applicable.\n- Run the project test, lint, typecheck, and build commands.\n- Make the smallest production-quality change.\n- Summarize the implementation and verification in the pull request.")}')"
+
+          payload="$(jq -n \
+            --arg prompt "$prompt" \
+            --arg repository "$REPOSITORY" \
+            --arg branch "$DEFAULT_BRANCH" \
+            --arg title "Jules: issue #$ISSUE_NUMBER" \
+            '{prompt: $prompt, title: $title, sourceContext: {source: ("sources/github/" + $repository), githubRepoContext: {startingBranch: $branch}}, automationMode: "AUTO_CREATE_PR", requirePlanApproval: true}')"
+
+          curl --fail-with-body -sS \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-Goog-Api-Key: ${JULES_API_KEY}" \
+            -d "$payload" \
+            "https://jules.googleapis.com/v1alpha/sessions" | jq .
